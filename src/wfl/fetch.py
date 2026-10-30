@@ -47,16 +47,16 @@ def _hourly(s):
     return s[~s.index.duplicated()].sort_index().resample("h").mean()
 
 
-def fetch_entsoe_forecast(day):
-    """ENTSO-E day-ahead wind forecast (onshore + offshore, MW) for the UTC day, or None if not published yet."""
+def fetch_entsoe_forecast(idx):
+    """ENTSO-E day-ahead wind forecast (onshore + offshore, MW) for the hours in `idx` (one German day), or None if
+    it is not completely published yet."""
     try:
-        df = _client().query_wind_and_solar_forecast(ZONE, start=day, end=day + pd.Timedelta(days=1))
+        df = _client().query_wind_and_solar_forecast(ZONE, start=idx[0], end=idx[-1] + pd.Timedelta(hours=1))
     except Exception as e:  # noqa: BLE001
         if type(e).__name__ == "NoMatchingDataError":
             return None
         raise
-    s = _hourly(df["Wind Onshore"] + df["Wind Offshore"])
-    s = s.reindex(pd.date_range(day, periods=24, freq="h", tz="UTC"))
+    s = _hourly(df["Wind Onshore"] + df["Wind Offshore"]).reindex(idx)
     return s if s.notna().all() else None
 
 

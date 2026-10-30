@@ -13,13 +13,13 @@ sys.path.insert(0, str(ROOT / "src"))
 
 import pandas as pd
 
-from wfl.forecast import load_models, make_forecast, score_day
+from wfl.forecast import load_models, make_forecast, score_day, target_index
 
 H = pd.Timedelta(hours=1)
 
 
 def _read_series(path):
-    d = pd.read_csv(path, index_col=0)
+    d = pd.read_csv(path, index_col=0, float_precision="round_trip")  # exact floats: models can react to 1-ulp differences
     d.index = pd.to_datetime(d.index, utc=True)
     return d.iloc[:, 0].sort_index()
 
@@ -29,7 +29,8 @@ def run(now, root, fetch, target=None, dry=False, log=print):
     now = pd.Timestamp(now)
     now = now.tz_localize("UTC") if now.tzinfo is None else now.tz_convert("UTC")
     today = now.normalize()
-    target = today + pd.Timedelta(days=1) if target is None else pd.Timestamp(target, tz="UTC")
+    target = f"{(today + pd.Timedelta(days=1)):%Y-%m-%d}" if target is None else str(target)[:10]  # a German calendar day
+    idx = target_index(target)
     models = load_models(root / "models" / "final_models.joblib")
 
     # 1) actual generation up to the end of yesterday
@@ -46,7 +47,7 @@ def run(now, root, fetch, target=None, dry=False, log=print):
     sb = pd.read_csv(sb_path) if sb_path.exists() else pd.DataFrame(
         columns=["date", "n_hours", "mae_weather_model", "mae_hybrid", "mae_entsoe", "scored_at_utc"])
     for f in sorted((root / "forecasts").glob("*.csv")):
-        if f.stem in set(sb["date"].astype(str)) or pd.Timestamp(f.stem, tz="UTC") >= today:
+        if f.stem in set(sb["date"].astype(str)) or target_index(f.stem)[-1] + H > now:
             continue  # already scored, or the day is not over yet
         fc = pd.read_csv(f, index_col="time_utc", parse_dates=["time_utc"])
         res = score_day(fc, hist)
@@ -57,22 +58,25 @@ def run(now, root, fetch, target=None, dry=False, log=print):
         sb.to_csv(sb_path, index=False)
 
     # 3) tomorrow's forecast (never overwrite a forecast that already exists; only fill in a missing hybrid)
-    path = root / "forecasts" / f"{target:%Y-%m-%d}.csv"
+    path = root / "forecasts" / f"{target}.csv"
     existing = pd.read_csv(path, index_col="time_utc", parse_dates=["time_utc"]) if path.exists() else None
-    entsoe = fetch.fetch_entsoe_forecast(target)
+    entsoe = fetch.fetch_entsoe_forecast(idx)
     av = root / "logs" / "entsoe_availability.csv"
     if not dry:
         av.parent.mkdir(exist_ok=True)
-        pd.DataFrame([{"run_utc": f"{now:%Y-%m-%d %H:%M}", "target_date": f"{target:%Y-%m-%d}",
+        pd.DataFrame([{"run_utc": f"{now:%Y-%m-%d %H:%M}", "target_date": target,
                        "entsoe_wind_forecast_available": entsoe is not None}]).to_csv(av, mode="a", header=not av.exists(), index=False)
     if existing is not None and not existing["hybrid_mw"].isna().any():
-        log(f"forecast for {target:%Y-%m-%d} already complete")
+        log(f"forecast for {target} already complete")
         return
     if existing is not None and entsoe is None:
-        log(f"forecast for {target:%Y-%m-%d} exists; ENTSO-E forecast still not published")
+        log(f"forecast for {target} exists; ENTSO-E forecast still not published")
         return
-    weather = fetch.fetch_weather(target - pd.Timedelta(days=1), target)
-    out, _ = make_forecast(target, weather, hist, entsoe, models)
+    if existing is None and now >= idx[0]:
+        log(f"too late: German day {target} has already started, no forecast made")
+        return
+    weather = fetch.fetch_weather(idx[0].floor("D") - pd.Timedelta(days=1), idx[-1].floor("D"))
+    out, _ = make_forecast(idx, weather, hist, entsoe, models)
     if existing is not None:  # keep the original weather-model forecast, add ENTSO-E and hybrid
         out["weather_model_mw"] = existing["weather_model_mw"].to_numpy()
         out["made_at_utc"] = existing["made_at_utc"].to_numpy()
@@ -80,7 +84,7 @@ def run(now, root, fetch, target=None, dry=False, log=print):
         out["made_at_utc"] = f"{now:%Y-%m-%d %H:%M}"
     out["hybrid_made_at_utc"] = f"{now:%Y-%m-%d %H:%M}" if out["hybrid_mw"].notna().all() else ""
     out.index.name = "time_utc"
-    log(f"forecast for {target:%Y-%m-%d}: weather model mean {out['weather_model_mw'].mean():.0f} MW, "
+    log(f"forecast for {target}: weather model mean {out['weather_model_mw'].mean():.0f} MW, "
         f"ENTSO-E {'available' if entsoe is not None else 'not yet available'}")
     if not dry:
         path.parent.mkdir(exist_ok=True)
@@ -89,7 +93,7 @@ def run(now, root, fetch, target=None, dry=False, log=print):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--target", help="UTC date YYYY-MM-DD (default: tomorrow)")
+    ap.add_argument("--target", help="UTC date YYYY-MM-DD (default: tomorrow); a German calendar day")
     ap.add_argument("--dry-run", action="store_true", help="print what would happen, write nothing")
     a = ap.parse_args()
     from wfl import fetch

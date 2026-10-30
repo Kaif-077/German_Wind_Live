@@ -60,7 +60,7 @@ adds a learned correction to ENTSO-E's own day-ahead forecast.
 - ENTSO-E publishes its wind forecast after the day-ahead auction closes, so the hybrid is not usable before the auction.
 - Live weather inputs differ from those used in the research test, so live errors can differ from the research results.
 - Early in the track record there are too few days to conclude anything.
-- Hourly values are for UTC days, not German days.
+- Each forecast covers one German calendar day (23, 24 or 25 hours on clock-change days); the hours shown are UTC.
 """)
     av = R / "logs" / "entsoe_availability.csv"
     if av.exists():

@@ -10,8 +10,11 @@ import pandas as pd
 
 from wfl import config as C
 from wfl import fetch
+from wfl.forecast import target_index
 
 DAY = pd.Timestamp("2026-10-29", tz="UTC")
+IDX = target_index("2026-10-29")  # the German day: 2026-10-28 23:00 UTC to 2026-10-29 22:00 UTC
+PUBLISHED_UNTIL = IDX[-1] + pd.Timedelta(hours=1)  # ENTSO-E publishes whole German days only
 
 # Open-Meteo: JSON with hourly lists -> long table with the 8 locations
 calls = []
@@ -35,20 +38,27 @@ def quarter(day, cols, n=96):
 class Fake:
     mode = "ok"
     def query_wind_and_solar_forecast(self, code, *, start, end, **kw):
-        if self.mode == "none":
+        idx = pd.date_range(start, end, freq="15min", inclusive="left")
+        idx = idx[idx < PUBLISHED_UNTIL]                      # nothing beyond the end of the published German day
+        if self.mode == "none" or len(idx) == 0:
             raise NoMatchingDataError()
-        n = 96 if self.mode == "ok" else 40  # 'partial' = only part of the day published
-        return quarter(start, {"Solar": 100.0, "Wind Offshore": 1000.0, "Wind Onshore": 5000.0}, n)
+        if self.mode == "partial":
+            idx = idx[:40]
+        return pd.DataFrame({"Solar": 100.0, "Wind Offshore": 1000.0, "Wind Onshore": 5000.0}, index=idx.tz_convert("Europe/Berlin"))
     def query_generation(self, code, *, start, end, psr_type=None, **kw):
         v = {"B19": 8000.0, "B18": 2000.0}[psr_type]
         d = quarter(start, {"Wind Onshore" if psr_type == "B19" else "Wind Offshore": v}, 96 * 2)
         return d
 fake = Fake()
 fetch._client = lambda: fake
-s = fetch.fetch_entsoe_forecast(DAY)
+s = fetch.fetch_entsoe_forecast(IDX)
 assert len(s) == 24 and (s == 6000.0).all() and str(s.index.tz) == "UTC"
-fake.mode = "none"; assert fetch.fetch_entsoe_forecast(DAY) is None       # not published yet
-fake.mode = "partial"; assert fetch.fetch_entsoe_forecast(DAY) is None    # incomplete day is not used
+# the bug found in the first live runs: a UTC day always ends one hour after the German day, so it never looked complete
+utc_day = pd.date_range("2026-10-29", periods=24, freq="h", tz="UTC")
+assert fetch.fetch_entsoe_forecast(utc_day) is None
+fake.mode = "none"; assert fetch.fetch_entsoe_forecast(IDX) is None       # not published yet
+fake.mode = "partial"; assert fetch.fetch_entsoe_forecast(IDX) is None    # incomplete day is not used
+fake.mode = "ok"
 a = fetch.fetch_actual_wind(DAY, DAY + pd.Timedelta(days=2))
 assert len(a) == 48 and (a == 10000.0).all()
 
