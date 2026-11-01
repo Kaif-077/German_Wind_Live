@@ -4,7 +4,9 @@ A small live companion to the research project [Power_Market_Analytics](https://
 Every day an automatic job (GitHub Actions) forecasts the next day's German wind generation, saves the forecast **before the day happens**,
 and later scores it against ENTSO-E's actual generation. The dashboard shows tomorrow's forecast and the running scoreboard.
 
-**Live dashboard:** (add your Streamlit link here after deploying)
+**Live dashboard:** https://germanwindlive-k4mdpla26whsvxwsfttvlc.streamlit.app/
+
+**Status:** the track record started on 30 October 2026. Only a few days are scored so far, so no accuracy conclusions yet (see Honest limits).
 
 ## What runs each day (`run_daily.py`)
 1. Add yesterday's actual wind generation (ENTSO-E) to `history/actual_wind.csv`.
@@ -40,3 +42,13 @@ The real calls cannot be tested offline; the first live runs are their test.
 
 ## Known issue fixed on 30 October 2026
 The first version asked ENTSO-E for a UTC day. ENTSO-E publishes whole German days, so the last hour of every UTC day was always missing and the job never saw the forecast. Forecast files from before the fix (2026-10-29 and 2026-10-30, UTC days) have no ENTSO-E or hybrid values, and their availability log rows are invalid.
+
+## Measured: when ENTSO-E's next-day wind forecast appears
+From `logs/entsoe_availability.csv` after the fix (one row per job run):
+
+| Forecast for | Not yet published at | Published by |
+|---|---|---|
+| 31 October | 11:08 UTC (30 Oct) | 18:11 UTC (30 Oct) |
+| 1 November | 14:39 and 15:57 UTC (31 Oct) | 17:52 UTC (31 Oct) |
+
+So it appears in the late afternoon (about 17:00 to 19:00 German time), after the 12:00 day-ahead auction close. The log keeps growing with every run.
