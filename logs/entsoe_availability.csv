@@ -47,3 +47,4 @@ run_utc,target_date,entsoe_wind_forecast_available
 2026-11-10 18:29,2026-11-11,True
 2026-11-10 20:33,2026-11-11,True
 2026-11-10 21:23,2026-11-11,True
+2026-11-12 16:58,2026-11-13,False
