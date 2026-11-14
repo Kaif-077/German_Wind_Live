@@ -14,6 +14,7 @@ concurrency:
 jobs:
   run:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -22,16 +23,24 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-job.txt
       - run: pip install -r requirements-job.txt
-      - run: python run_daily.py
+      - name: Run the job and save the results
         env:
           ENTSOE_API_KEY: ${{ secrets.ENTSOE_API_KEY }}
-      - name: Commit results
         run: |
           git config user.name "daily-bot"
           git config user.email "daily-bot@users.noreply.github.com"
-          git add -A forecasts scoreboard.csv history logs
-          if ! git diff --staged --quiet; then
-            git commit -m "Daily forecast $(date -u '+%Y-%m-%d %H:%M') UTC"
-            git pull --rebase
-            git push
-          fi
+          # If the repository changed while the job was running (another run or a manual push), do not try to merge
+          # CSV files: start again from the latest version. The job is safe to repeat.
+          RUN_CMD="${RUN_CMD:-python run_daily.py}"
+          for attempt in 1 2 3 4; do
+            $RUN_CMD || exit 1
+            git add -A -- forecasts history logs scoreboard.csv 2>/dev/null || true
+            if git diff --staged --quiet; then echo "nothing to commit"; exit 0; fi
+            git commit -q -m "Daily forecast $(date -u '+%Y-%m-%d %H:%M') UTC"
+            if git push -q origin HEAD:main; then echo "pushed on attempt $attempt"; exit 0; fi
+            echo "push rejected (the repository changed meanwhile); restarting from the latest version (attempt $attempt)"
+            git fetch -q origin main
+            git reset -q --hard origin/main
+          done
+          echo "giving up after 4 attempts"
+          exit 1
